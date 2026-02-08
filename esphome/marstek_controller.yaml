@@ -1,0 +1,762 @@
+substitutions:
+  device_name: marstek-controller
+  marstek_m1_ip: !secret marstek_m1_ip
+  marstek_m2_ip: "0.0.0.0"
+  marstek_m3_ip: "0.0.0.0"
+
+esphome:
+  name: ${device_name}
+  includes:
+    - esphome/custom_components/marstek_modbus_tcp/marstek_modbus_tcp.h
+    - esphome/custom_components/marstek_controller/marstek_controller.h
+
+esp32:
+  board: esp32s3dev
+  framework:
+    type: arduino
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: none
+
+logger:
+api:
+ota:
+
+time:
+  - platform: sntp
+    id: rtc
+
+uart:
+  - id: uart_p1
+    rx_pin: GPIO44
+    baud_rate: 115200
+    parity: NONE
+    stop_bits: 1
+    data_bits: 8
+
+# DSMR for P1 meter
+# Adjust UART pins/baud for your hardware and DSMR version
+# If your P1 power is already in W, remove the * 1000 scale below.
+dsmr:
+  uart_id: uart_p1
+
+sensor:
+  - platform: dsmr
+    power_delivered:
+      id: p1_power_delivered
+    power_returned:
+      id: p1_power_returned
+
+  - platform: template
+    id: grid_power_w
+    name: "Grid Power"
+    unit_of_measurement: W
+    accuracy_decimals: 0
+    update_interval: 2s
+    lambda: |-
+      if (isnan(id(p1_power_delivered).state) || isnan(id(p1_power_returned).state)) return NAN;
+      return (id(p1_power_delivered).state - id(p1_power_returned).state) * 1000.0f;
+
+  # Dynamic pricing data from HA sensors (create these in HA as template sensors)
+  - platform: homeassistant
+    id: dyn_avg_cheapest
+    entity_id: sensor.house_battery_strategy_dynamic_cheapest_avg_tariff
+  - platform: homeassistant
+    id: dyn_avg_expensive
+    entity_id: sensor.house_battery_strategy_dynamic_expensive_avg_tariff
+  - platform: homeassistant
+    id: dyn_cheapest_start
+    entity_id: sensor.house_battery_strategy_dynamic_cheapest_start_ts
+  - platform: homeassistant
+    id: dyn_cheapest_end
+    entity_id: sensor.house_battery_strategy_dynamic_cheapest_end_ts
+  - platform: homeassistant
+    id: dyn_expensive_start
+    entity_id: sensor.house_battery_strategy_dynamic_expensive_start_ts
+  - platform: homeassistant
+    id: dyn_expensive_end
+    entity_id: sensor.house_battery_strategy_dynamic_expensive_end_ts
+
+  # Battery telemetry (read from Modbus by custom component)
+  - platform: template
+    name: "Marstek M1 SoC"
+    unit_of_measurement: "%"
+    accuracy_decimals: 1
+    update_interval: 5s
+    lambda: |-
+      if (id(bat1) == nullptr) return NAN;
+      return id(bat1)->soc();
+  - platform: template
+    name: "Marstek M1 Power"
+    unit_of_measurement: W
+    accuracy_decimals: 0
+    update_interval: 5s
+    lambda: |-
+      if (id(bat1) == nullptr) return NAN;
+      return id(bat1)->battery_power_w();
+  - platform: template
+    name: "Marstek M1 Total Energy"
+    unit_of_measurement: kWh
+    accuracy_decimals: 2
+    update_interval: 10s
+    lambda: |-
+      if (id(bat1) == nullptr) return NAN;
+      return id(bat1)->total_energy_kwh();
+
+  - platform: template
+    name: "Marstek M2 SoC"
+    unit_of_measurement: "%"
+    accuracy_decimals: 1
+    update_interval: 5s
+    lambda: |-
+      if (id(bat2) == nullptr) return NAN;
+      return id(bat2)->soc();
+  - platform: template
+    name: "Marstek M2 Power"
+    unit_of_measurement: W
+    accuracy_decimals: 0
+    update_interval: 5s
+    lambda: |-
+      if (id(bat2) == nullptr) return NAN;
+      return id(bat2)->battery_power_w();
+  - platform: template
+    name: "Marstek M2 Total Energy"
+    unit_of_measurement: kWh
+    accuracy_decimals: 2
+    update_interval: 10s
+    lambda: |-
+      if (id(bat2) == nullptr) return NAN;
+      return id(bat2)->total_energy_kwh();
+
+  - platform: template
+    name: "Marstek M3 SoC"
+    unit_of_measurement: "%"
+    accuracy_decimals: 1
+    update_interval: 5s
+    lambda: |-
+      if (id(bat3) == nullptr) return NAN;
+      return id(bat3)->soc();
+  - platform: template
+    name: "Marstek M3 Power"
+    unit_of_measurement: W
+    accuracy_decimals: 0
+    update_interval: 5s
+    lambda: |-
+      if (id(bat3) == nullptr) return NAN;
+      return id(bat3)->battery_power_w();
+  - platform: template
+    name: "Marstek M3 Total Energy"
+    unit_of_measurement: kWh
+    accuracy_decimals: 2
+    update_interval: 10s
+    lambda: |-
+      if (id(bat3) == nullptr) return NAN;
+      return id(bat3)->total_energy_kwh();
+
+  - platform: template
+    name: "Controller Target Power"
+    unit_of_measurement: W
+    accuracy_decimals: 0
+    update_interval: 2s
+    lambda: |-
+      if (id(controller) == nullptr) return NAN;
+      return id(controller)->last_command().power_w;
+
+text_sensor:
+  - platform: template
+    name: "Controller Strategy"
+    update_interval: 2s
+    lambda: |-
+      if (id(controller) == nullptr) return std::string("unknown");
+      switch (id(controller)->last_strategy()) {
+        case esphome::marstek_controller::Strategy::FULL_STOP: return std::string("Full stop");
+        case esphome::marstek_controller::Strategy::SELF_CONSUMPTION: return std::string("Self-consumption");
+        case esphome::marstek_controller::Strategy::TIMED: return std::string("Timed");
+        case esphome::marstek_controller::Strategy::DYNAMIC: return std::string("Dynamic");
+        case esphome::marstek_controller::Strategy::CHARGE: return std::string("Charge");
+        case esphome::marstek_controller::Strategy::CHARGE_PV: return std::string("Charge PV");
+        case esphome::marstek_controller::Strategy::SELL: return std::string("Sell");
+        default: return std::string("unknown");
+      }
+
+  - platform: template
+    name: "Controller Mode"
+    update_interval: 2s
+    lambda: |-
+      if (id(controller) == nullptr) return std::string("unknown");
+      auto mode = id(controller)->last_command().mode;
+      switch (mode) {
+        case esphome::marstek_controller::Mode::STOP: return std::string("stop");
+        case esphome::marstek_controller::Mode::CHARGE: return std::string("charge");
+        case esphome::marstek_controller::Mode::DISCHARGE: return std::string("discharge");
+        default: return std::string("unknown");
+      }
+
+select:
+  - platform: template
+    name: "Master Battery Mode"
+    id: master_battery_mode
+    optimistic: true
+    options:
+      - Manual control
+      - Marstek control
+      - Full control
+    initial_option: Full control
+
+  - platform: template
+    name: "House Battery Strategy"
+    id: house_battery_strategy
+    optimistic: true
+    options:
+      - Full stop
+      - Self-consumption
+      - Timed
+      - Dynamic
+      - Charge
+      - Charge PV
+      - Sell
+    initial_option: Self-consumption
+
+  - platform: template
+    name: "Timed Baseline Strategy"
+    id: timed_strat_0
+    optimistic: true
+    options:
+      - Full stop
+      - Self-consumption
+      - Charge
+      - Charge PV
+      - Sell
+    initial_option: Self-consumption
+
+  - platform: template
+    name: "Timed Strategy A"
+    id: timed_strat_a
+    optimistic: true
+    options:
+      - Full stop
+      - Self-consumption
+      - Charge
+      - Charge PV
+      - Sell
+    initial_option: Self-consumption
+
+  - platform: template
+    name: "Timed Strategy B"
+    id: timed_strat_b
+    optimistic: true
+    options:
+      - Full stop
+      - Self-consumption
+      - Charge
+      - Charge PV
+      - Sell
+    initial_option: Self-consumption
+
+  - platform: template
+    name: "Timed Strategy C"
+    id: timed_strat_c
+    optimistic: true
+    options:
+      - Full stop
+      - Self-consumption
+      - Charge
+      - Charge PV
+      - Sell
+    initial_option: Self-consumption
+
+  - platform: template
+    name: "Dynamic Baseline Strategy"
+    id: dyn_strat_default
+    optimistic: true
+    options:
+      - Charge PV
+      - Self-consumption
+      - Full stop
+    initial_option: Self-consumption
+
+  - platform: template
+    name: "Dynamic Cheapest Strategy"
+    id: dyn_strat_cheapest
+    optimistic: true
+    options:
+      - Charge
+      - Charge PV
+    initial_option: Charge
+
+  - platform: template
+    name: "Dynamic Expensive Strategy"
+    id: dyn_strat_expensive
+    optimistic: true
+    options:
+      - Self-consumption
+      - Sell
+    initial_option: Self-consumption
+
+  - platform: template
+    name: "Charge Goal"
+    id: charge_goal
+    optimistic: true
+    options:
+      - batteries are full
+      - state of charge
+      - energy reserve
+    initial_option: batteries are full
+
+  - platform: template
+    name: "Sell Goal"
+    id: sell_goal
+    optimistic: true
+    options:
+      - batteries are empty
+      - state of charge
+      - energy reserve
+    initial_option: batteries are empty
+
+switch:
+  - platform: template
+    name: "Timed Enable Period B"
+    id: timed_has_b
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+
+  - platform: template
+    name: "Timed Enable Period C"
+    id: timed_has_c
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+
+number:
+  - platform: template
+    name: "Priority Battery"
+    id: priority_battery
+    min_value: 1
+    max_value: 3
+    step: 1
+    optimistic: true
+    initial_value: 1
+
+  - platform: template
+    name: "Target Grid Consumption"
+    id: target_grid_power
+    min_value: -15000
+    max_value: 15000
+    step: 1
+    unit_of_measurement: W
+    optimistic: true
+    initial_value: 0
+
+  - platform: template
+    name: "PID Kp"
+    id: pid_kp
+    min_value: 0
+    max_value: 2
+    step: 0.05
+    optimistic: true
+    initial_value: 0.4
+
+  - platform: template
+    name: "PID Ki"
+    id: pid_ki
+    min_value: 0
+    max_value: 5
+    step: 0.05
+    optimistic: true
+    initial_value: 0.05
+
+  - platform: template
+    name: "PID Kd"
+    id: pid_kd
+    min_value: 0
+    max_value: 5
+    step: 0.05
+    optimistic: true
+    initial_value: 0
+
+  - platform: template
+    name: "Hysteresis"
+    id: hysteresis
+    min_value: 0
+    max_value: 200
+    step: 1
+    unit_of_measurement: W
+    optimistic: true
+    initial_value: 50
+
+  - platform: template
+    name: "Idle Time"
+    id: idle_minutes
+    min_value: 0
+    max_value: 60
+    step: 1
+    unit_of_measurement: min
+    optimistic: true
+    initial_value: 5
+
+  - platform: template
+    name: "Output Dampening"
+    id: output_dampening
+    min_value: 0
+    max_value: 90
+    step: 10
+    unit_of_measurement: "%"
+    optimistic: true
+    initial_value: 20
+
+  - platform: template
+    name: "Error Dampening"
+    id: error_dampening
+    min_value: 0
+    max_value: 90
+    step: 10
+    unit_of_measurement: "%"
+    optimistic: true
+    initial_value: 0
+
+  - platform: template
+    name: "Charge Target Power"
+    id: charge_target_power
+    min_value: 0
+    max_value: 7500
+    step: 1
+    unit_of_measurement: W
+    optimistic: true
+    initial_value: 1000
+
+  - platform: template
+    name: "Charge Target SoC"
+    id: charge_target_soc
+    min_value: 15
+    max_value: 100
+    step: 1
+    unit_of_measurement: "%"
+    optimistic: true
+    initial_value: 100
+
+  - platform: template
+    name: "Charge Target Energy"
+    id: charge_target_energy
+    min_value: 0
+    max_value: 30
+    step: 0.1
+    unit_of_measurement: kWh
+    optimistic: true
+    initial_value: 0
+
+  - platform: template
+    name: "Sell Target Power"
+    id: sell_target_power
+    min_value: 0
+    max_value: 7500
+    step: 1
+    unit_of_measurement: W
+    optimistic: true
+    initial_value: 1000
+
+  - platform: template
+    name: "Sell Target SoC"
+    id: sell_target_soc
+    min_value: 12
+    max_value: 80
+    step: 1
+    unit_of_measurement: "%"
+    optimistic: true
+    initial_value: 20
+
+  - platform: template
+    name: "Sell Target Energy"
+    id: sell_target_energy
+    min_value: 0
+    max_value: 30
+    step: 0.1
+    unit_of_measurement: kWh
+    optimistic: true
+    initial_value: 0
+
+  - platform: template
+    name: "Dynamic Cheapest Threshold"
+    id: dyn_threshold_cheapest
+    min_value: 0
+    max_value: 30
+    step: 1
+    unit_of_measurement: cents
+    optimistic: true
+    initial_value: 30
+
+  - platform: template
+    name: "Dynamic Delta Threshold"
+    id: dyn_threshold_delta
+    min_value: 0
+    max_value: 20
+    step: 1
+    unit_of_measurement: cents
+    optimistic: true
+    initial_value: 5
+
+  - platform: template
+    name: "Timed Period A Start (min)"
+    id: period_a_start
+    min_value: 0
+    max_value: 1439
+    step: 1
+    optimistic: true
+    initial_value: 0
+
+  - platform: template
+    name: "Timed Period A End (min)"
+    id: period_a_end
+    min_value: 0
+    max_value: 1439
+    step: 1
+    optimistic: true
+    initial_value: 0
+
+  - platform: template
+    name: "Timed Period B Start (min)"
+    id: period_b_start
+    min_value: 0
+    max_value: 1439
+    step: 1
+    optimistic: true
+    initial_value: 0
+
+  - platform: template
+    name: "Timed Period B End (min)"
+    id: period_b_end
+    min_value: 0
+    max_value: 1439
+    step: 1
+    optimistic: true
+    initial_value: 0
+
+  - platform: template
+    name: "Timed Period C Start (min)"
+    id: period_c_start
+    min_value: 0
+    max_value: 1439
+    step: 1
+    optimistic: true
+    initial_value: 0
+
+  - platform: template
+    name: "Timed Period C End (min)"
+    id: period_c_end
+    min_value: 0
+    max_value: 1439
+    step: 1
+    optimistic: true
+    initial_value: 0
+
+  # Battery 1 limits
+  - platform: template
+    name: "M1 Charge Cutoff SoC"
+    id: m1_charge_cutoff
+    min_value: 80
+    max_value: 100
+    step: 1
+    unit_of_measurement: "%"
+    optimistic: true
+    initial_value: 100
+  - platform: template
+    name: "M1 Discharge Cutoff SoC"
+    id: m1_discharge_cutoff
+    min_value: 12
+    max_value: 80
+    step: 1
+    unit_of_measurement: "%"
+    optimistic: true
+    initial_value: 12
+  - platform: template
+    name: "M1 Max Charge Power"
+    id: m1_max_charge
+    min_value: 0
+    max_value: 2500
+    step: 1
+    unit_of_measurement: W
+    optimistic: true
+    initial_value: 2500
+  - platform: template
+    name: "M1 Max Discharge Power"
+    id: m1_max_discharge
+    min_value: 0
+    max_value: 2500
+    step: 1
+    unit_of_measurement: W
+    optimistic: true
+    initial_value: 2500
+
+  # Battery 2 limits
+  - platform: template
+    name: "M2 Charge Cutoff SoC"
+    id: m2_charge_cutoff
+    min_value: 80
+    max_value: 100
+    step: 1
+    unit_of_measurement: "%"
+    optimistic: true
+    initial_value: 100
+  - platform: template
+    name: "M2 Discharge Cutoff SoC"
+    id: m2_discharge_cutoff
+    min_value: 12
+    max_value: 80
+    step: 1
+    unit_of_measurement: "%"
+    optimistic: true
+    initial_value: 12
+  - platform: template
+    name: "M2 Max Charge Power"
+    id: m2_max_charge
+    min_value: 0
+    max_value: 2500
+    step: 1
+    unit_of_measurement: W
+    optimistic: true
+    initial_value: 2500
+  - platform: template
+    name: "M2 Max Discharge Power"
+    id: m2_max_discharge
+    min_value: 0
+    max_value: 2500
+    step: 1
+    unit_of_measurement: W
+    optimistic: true
+    initial_value: 2500
+
+  # Battery 3 limits
+  - platform: template
+    name: "M3 Charge Cutoff SoC"
+    id: m3_charge_cutoff
+    min_value: 80
+    max_value: 100
+    step: 1
+    unit_of_measurement: "%"
+    optimistic: true
+    initial_value: 100
+  - platform: template
+    name: "M3 Discharge Cutoff SoC"
+    id: m3_discharge_cutoff
+    min_value: 12
+    max_value: 80
+    step: 1
+    unit_of_measurement: "%"
+    optimistic: true
+    initial_value: 12
+  - platform: template
+    name: "M3 Max Charge Power"
+    id: m3_max_charge
+    min_value: 0
+    max_value: 2500
+    step: 1
+    unit_of_measurement: W
+    optimistic: true
+    initial_value: 2500
+  - platform: template
+    name: "M3 Max Discharge Power"
+    id: m3_max_discharge
+    min_value: 0
+    max_value: 2500
+    step: 1
+    unit_of_measurement: W
+    optimistic: true
+    initial_value: 2500
+
+globals:
+  - id: bat1
+    type: esphome::marstek_controller::MarstekBatteryComponent*
+    restore_value: no
+    initial_value: 'nullptr'
+  - id: bat2
+    type: esphome::marstek_controller::MarstekBatteryComponent*
+    restore_value: no
+    initial_value: 'nullptr'
+  - id: bat3
+    type: esphome::marstek_controller::MarstekBatteryComponent*
+    restore_value: no
+    initial_value: 'nullptr'
+  - id: controller
+    type: esphome::marstek_controller::MarstekController*
+    restore_value: no
+    initial_value: 'nullptr'
+
+custom_component:
+  - lambda: |-
+      id(bat1) = new esphome::marstek_controller::MarstekBatteryComponent("${marstek_m1_ip}", 502, 1, 1000);
+      id(bat1)->set_update_interval(5000);
+      return {id(bat1)};
+
+  - lambda: |-
+      if (std::string("${marstek_m2_ip}") == "0.0.0.0") return {};
+      id(bat2) = new esphome::marstek_controller::MarstekBatteryComponent("${marstek_m2_ip}", 502, 1, 1000);
+      id(bat2)->set_update_interval(5000);
+      return {id(bat2)};
+
+  - lambda: |-
+      if (std::string("${marstek_m3_ip}") == "0.0.0.0") return {};
+      id(bat3) = new esphome::marstek_controller::MarstekBatteryComponent("${marstek_m3_ip}", 502, 1, 1000);
+      id(bat3)->set_update_interval(5000);
+      return {id(bat3)};
+
+  - lambda: |-
+      auto *ctrl = new esphome::marstek_controller::MarstekController();
+      ctrl->set_update_interval(2000);
+      ctrl->set_time_source(id(rtc));
+      ctrl->set_grid_power_sensor(id(grid_power_w));
+      ctrl->set_strategy_select(id(house_battery_strategy));
+      ctrl->set_master_mode_select(id(master_battery_mode));
+      ctrl->set_timed_default_strategy(id(timed_strat_0));
+      ctrl->set_timed_strat_a(id(timed_strat_a));
+      ctrl->set_timed_strat_b(id(timed_strat_b));
+      ctrl->set_timed_strat_c(id(timed_strat_c));
+      ctrl->set_timed_period_a_start(id(period_a_start));
+      ctrl->set_timed_period_a_end(id(period_a_end));
+      ctrl->set_timed_period_b_start(id(period_b_start));
+      ctrl->set_timed_period_b_end(id(period_b_end));
+      ctrl->set_timed_period_c_start(id(period_c_start));
+      ctrl->set_timed_period_c_end(id(period_c_end));
+      ctrl->set_timed_has_b(id(timed_has_b));
+      ctrl->set_timed_has_c(id(timed_has_c));
+      ctrl->set_dynamic_default_strategy(id(dyn_strat_default));
+      ctrl->set_dynamic_cheapest_strategy(id(dyn_strat_cheapest));
+      ctrl->set_dynamic_expensive_strategy(id(dyn_strat_expensive));
+      ctrl->set_dynamic_threshold_cheapest(id(dyn_threshold_cheapest));
+      ctrl->set_dynamic_threshold_delta(id(dyn_threshold_delta));
+      ctrl->set_dynamic_cheapest_start(id(dyn_cheapest_start));
+      ctrl->set_dynamic_cheapest_end(id(dyn_cheapest_end));
+      ctrl->set_dynamic_expensive_start(id(dyn_expensive_start));
+      ctrl->set_dynamic_expensive_end(id(dyn_expensive_end));
+      ctrl->set_dynamic_avg_cheapest(id(dyn_avg_cheapest));
+      ctrl->set_dynamic_avg_expensive(id(dyn_avg_expensive));
+      ctrl->set_target_grid_power(id(target_grid_power));
+      ctrl->set_pid_kp(id(pid_kp));
+      ctrl->set_pid_ki(id(pid_ki));
+      ctrl->set_pid_kd(id(pid_kd));
+      ctrl->set_hysteresis(id(hysteresis));
+      ctrl->set_idle_time(id(idle_minutes));
+      ctrl->set_output_dampening(id(output_dampening));
+      ctrl->set_error_dampening(id(error_dampening));
+      ctrl->set_charge_target_power(id(charge_target_power));
+      ctrl->set_charge_target_soc(id(charge_target_soc));
+      ctrl->set_charge_target_energy(id(charge_target_energy));
+      ctrl->set_charge_goal(id(charge_goal));
+      ctrl->set_sell_target_power(id(sell_target_power));
+      ctrl->set_sell_target_soc(id(sell_target_soc));
+      ctrl->set_sell_target_energy(id(sell_target_energy));
+      ctrl->set_sell_goal(id(sell_goal));
+      ctrl->set_priority_battery(id(priority_battery));
+      if (id(bat1) != nullptr) {
+        ctrl->add_battery(id(bat1));
+        ctrl->add_battery_config(id(m1_charge_cutoff), id(m1_discharge_cutoff), id(m1_max_charge), id(m1_max_discharge));
+      }
+      if (id(bat2) != nullptr) {
+        ctrl->add_battery(id(bat2));
+        ctrl->add_battery_config(id(m2_charge_cutoff), id(m2_discharge_cutoff), id(m2_max_charge), id(m2_max_discharge));
+      }
+      if (id(bat3) != nullptr) {
+        ctrl->add_battery(id(bat3));
+        ctrl->add_battery_config(id(m3_charge_cutoff), id(m3_discharge_cutoff), id(m3_max_charge), id(m3_max_discharge));
+      }
+      id(controller) = ctrl;
+      return {ctrl};

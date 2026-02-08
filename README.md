@@ -61,6 +61,7 @@ This project is designed for hobbyists who want full control over their home bat
 ### Advanced
 - **[Advanced Features](docs/06-advanced-features.md)** - EV trigger, multi-battery, 3-phase, performance optimizations
 - **[Troubleshooting](docs/07-troubleshooting.md)** - Common issues and solutions
+- **[ESPHome Standalone Controller](docs/08-esphome-standalone.md)** - Run strategies on an ESP32-S3 and control batteries over Modbus TCP
 
 ### Updating
 Check the [release notes](RELEASE_NOTES.md) to see which files have changed. In most cases your `Battery Start` flow stays unchanged (contains your custom settings). Copy the other files and import Node-RED flows as per [installation guide](docs/01-getting-started.md).
