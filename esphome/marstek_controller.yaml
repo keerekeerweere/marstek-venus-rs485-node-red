@@ -1,5 +1,8 @@
 substitutions:
   device_name: marstek-controller
+  friendly_name: Marstek Controller
+  energy_prefix: "Energy "
+  fixed_mac: "02:00:00:00:00:01"
   marstek_m1_ip: !secret marstek_m1_ip
   marstek_m2_ip: "0.0.0.0"
   marstek_m3_ip: "0.0.0.0"
@@ -15,12 +18,35 @@ esp32:
   framework:
     type: arduino
 
-wifi:
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
-  power_save_mode: none
+# Choose ONE network interface.
+# If you use ethernet:, remove wifi: below (and vice-versa).
+ethernet:
+  type: W5500
+  clk_pin: 12
+  interrupt_pin: 9
+  mosi_pin: 11
+  miso_pin: 13
+  cs_pin: 10
+  clock_speed: 16Mhz
+  domain: .70.mystack.eu
+  mac_address: ${fixed_mac}
+
+# wifi:
+#   ssid: !secret wifi_ssid
+#   password: !secret wifi_password
+#   power_save_mode: none
 
 logger:
+  level: DEBUG
+  baud_rate: 0
+  logs:
+    ethernet: INFO
+    sensor: INFO
+    dsmr: INFO
+    udpserver: INFO
+    text_sensor: INFO
+    modbustcp_controller: DEBUG
+
 api:
 ota:
 
@@ -29,25 +55,114 @@ time:
     id: rtc
 
 uart:
-  - id: uart_p1
-    rx_pin: GPIO44
+  - id: p1meter_uart
+    rx_pin:
+      number: 44
+      inverted: true
     baud_rate: 115200
     parity: NONE
     stop_bits: 1
     data_bits: 8
+    rx_buffer_size: 6000
 
-# DSMR for P1 meter
-# Adjust UART pins/baud for your hardware and DSMR version
-# If your P1 power is already in W, remove the * 1000 scale below.
 dsmr:
-  uart_id: uart_p1
+  id: dsmr_meter_dev
+  uart_id: p1meter_uart
+  max_telegram_length: 4096
+  crc_check: false
+  receive_timeout: 400ms
 
 sensor:
   - platform: dsmr
+    energy_delivered_tariff1:
+      name: "${energy_prefix}Energy Consumed Tariff 1"
+      state_class: total_increasing
+    energy_delivered_tariff2:
+      name: "${energy_prefix}Energy Consumed Tariff 2"
+      state_class: total_increasing
+    energy_returned_tariff1:
+      name: "${energy_prefix}Energy Produced Tariff 1"
+    energy_returned_tariff2:
+      name: "${energy_prefix}Energy Produced Tariff 2"
     power_delivered:
-      id: p1_power_delivered
+      name: "${energy_prefix}Power Consumed"
+      id: esp32_s3_energy_meter_power_consumed
+      accuracy_decimals: 3
     power_returned:
-      id: p1_power_returned
+      name: "${energy_prefix}Power Produced"
+      id: esp32_s3_energy_meter_power_produced
+      accuracy_decimals: 3
+    electricity_failures:
+      name: "${energy_prefix}Electricity Failures"
+      icon: mdi:alert
+    electricity_long_failures:
+      name: "${energy_prefix}Long Electricity Failures"
+      icon: mdi:alert
+    voltage_l1:
+      name: "${energy_prefix}Voltage Phase 1"
+      id: esp32_s3_energy_meter_voltage_phase_1
+      accuracy_decimals: 3
+    voltage_l2:
+      name: "${energy_prefix}Voltage Phase 2"
+      id: esp32_s3_energy_meter_voltage_phase_2
+      accuracy_decimals: 3
+    voltage_l3:
+      name: "${energy_prefix}Voltage Phase 3"
+      id: esp32_s3_energy_meter_voltage_phase_3
+      accuracy_decimals: 3
+    current_l1:
+      name: "${energy_prefix}Current Phase 1"
+      id: esp32_s3_energy_meter_current_phase_1
+      accuracy_decimals: 3
+    current_l2:
+      name: "${energy_prefix}Current Phase 2"
+      id: esp32_s3_energy_meter_current_phase_2
+      accuracy_decimals: 3
+    current_l3:
+      name: "${energy_prefix}Current Phase 3"
+      id: esp32_s3_energy_meter_current_phase_3
+      accuracy_decimals: 3
+    power_delivered_l1:
+      name: "${energy_prefix}Power Consumed Phase 1"
+      id: esp32_s3_energy_meter_power_consumed_phase_1
+      accuracy_decimals: 3
+    power_delivered_l2:
+      name: "${energy_prefix}Power Consumed Phase 2"
+      id: esp32_s3_energy_meter_power_consumed_phase_2
+      accuracy_decimals: 3
+    power_delivered_l3:
+      name: "${energy_prefix}Power Consumed Phase 3"
+      id: esp32_s3_energy_meter_power_consumed_phase_3
+      accuracy_decimals: 3
+    power_returned_l1:
+      name: "${energy_prefix}Power Produced Phase 1"
+      id: esp32_s3_energy_meter_power_produced_phase_1
+      accuracy_decimals: 3
+    power_returned_l2:
+      name: "${energy_prefix}Power Produced Phase 2"
+      id: esp32_s3_energy_meter_power_produced_phase_2
+      accuracy_decimals: 3
+    power_returned_l3:
+      name: "${energy_prefix}Power Produced Phase 3"
+      id: esp32_s3_energy_meter_power_produced_phase_3
+      accuracy_decimals: 3
+    gas_delivered_be:
+      name: "${energy_prefix}Gas Consumed Belgium"
+      accuracy_decimals: 3
+    water_delivered:
+      name: "${energy_prefix}Water Consumed"
+      accuracy_decimals: 3
+    active_energy_import_current_average_demand:
+      name: "${energy_prefix}Peak Tarrif Quarterly Demand"
+      accuracy_decimals: 3
+    active_energy_import_maximum_demand_running_month:
+      name: "${energy_prefix}Peak Tarrif Monthly Demand"
+      accuracy_decimals: 3
+    active_energy_import_maximum_demand_last_13_months:
+      name: "${energy_prefix}Peak Tarrif 13Months Demand"
+      accuracy_decimals: 3
+  - platform: uptime
+    name: "${energy_prefix}DSMR reader Uptime"
 
   - platform: template
     id: grid_power_w
@@ -56,8 +171,9 @@ sensor:
     accuracy_decimals: 0
     update_interval: 2s
     lambda: |-
-      if (isnan(id(p1_power_delivered).state) || isnan(id(p1_power_returned).state)) return NAN;
-      return (id(p1_power_delivered).state - id(p1_power_returned).state) * 1000.0f;
+      if (isnan(id(esp32_s3_energy_meter_power_consumed).state) || isnan(id(esp32_s3_energy_meter_power_produced).state)) return NAN;
+      // DSMR power values are in kW; convert to W for control logic.
+      return (id(esp32_s3_energy_meter_power_consumed).state - id(esp32_s3_energy_meter_power_produced).state) * 1000.0f;
 
   # Dynamic pricing data from HA sensors (create these in HA as template sensors)
   - platform: homeassistant
@@ -165,6 +281,16 @@ sensor:
       return id(controller)->last_command().power_w;
 
 text_sensor:
+  - platform: dsmr
+    identification:
+      name: "DSMR Identification"
+    p1_version:
+      name: "DSMR Version"
+    p1_version_be:
+      name: "DSMR Version Belgium"
+  - platform: version
+    name: "${energy_prefix}ESPHome Version"
+    hide_timestamp: true
   - platform: template
     name: "Controller Strategy"
     update_interval: 2s
@@ -193,6 +319,11 @@ text_sensor:
         case esphome::marstek_controller::Mode::DISCHARGE: return std::string("discharge");
         default: return std::string("unknown");
       }
+
+button:
+  - platform: restart
+    id: restart_button
+    name: "${friendly_name} restart"
 
 select:
   - platform: template

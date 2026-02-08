@@ -4,9 +4,16 @@
 #include <string>
 #include <vector>
 
-#include <WiFi.h>
-
+#include "esphome/core/defines.h"
 #include "esphome/core/log.h"
+
+#ifdef USE_ETHERNET
+#include <Ethernet.h>
+using NetClient = EthernetClient;
+#else
+#include <WiFi.h>
+using NetClient = WiFiClient;
+#endif
 
 namespace esphome {
 namespace marstek_modbus_tcp {
@@ -32,7 +39,7 @@ class ModbusTcpClient {
   uint16_t transaction_id_{0};
   uint32_t timeout_ms_{1000};
 
-  WiFiClient client_;
+  NetClient client_;
 };
 
 static const char *const TAG = "marstek_modbus_tcp";
